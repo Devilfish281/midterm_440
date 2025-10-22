@@ -66,7 +66,7 @@ The File structure for my program is BELOW:
 │   ├── README.md
 │   ├── poetry.lock
 │   └── pyproject.toml
-    └── src/
+    ├── src/
         └── midterm_440/
             └── __init__.py
             └── numeric_core/
@@ -79,6 +79,16 @@ The File structure for my program is BELOW:
                 ├── shifter.py
                 └── twos.py
                 └── internal/
+    └── tests/
+        ├── __init__.py
+        └── conftest.py
+        ├── data/
+        └── unit/
+            ├── test_alu.py
+            ├── test_bits.py
+            ├── test_fpu_f32.py
+            ├── test_mdu.py
+            └── test_twos.py
 
 ########################################
 Here is my code for __init__.py BELOW:
@@ -151,14 +161,50 @@ Here is my code for bits.py BELOW:
 This module defines helpers for representing unsigned 32-bit values as
 lists of bits (least significant bit first) and for pretty-printing.
 
-.. note::
-   Implementations must **not** use host numeric base helpers like
-   :func:`int` with ``base``, :func:`bin`, :func:`hex`, or bitwise shifts
-   in the *final* project logic as per constraints; this scaffold only
-   declares interfaces.
+This reduces bugs and makes tests readable.
+
+.. important::
+   To keep implementation tractable, this module permits bitwise reads
+   (``&``, ``>>``) solely for conversion/formatting. Core arithmetic
+   (ALU/MDU/FPU) must still avoid host arithmetic/shift ops as required.
 """
 
 from typing import List
+
+_HEX_DIGITS = "0123456789ABCDEF"
+_NIBBLE_TO_HEX = {
+    (0, 0, 0, 0): "0",
+    (0, 0, 0, 1): "1",
+    (0, 0, 1, 0): "2",
+    (0, 0, 1, 1): "3",
+    (0, 1, 0, 0): "4",
+    (0, 1, 0, 1): "5",
+    (0, 1, 1, 0): "6",
+    (0, 1, 1, 1): "7",
+    (1, 0, 0, 0): "8",
+    (1, 0, 0, 1): "9",
+    (1, 0, 1, 0): "A",
+    (1, 0, 1, 1): "B",
+    (1, 1, 0, 0): "C",
+    (1, 1, 0, 1): "D",
+    (1, 1, 1, 0): "E",
+    (1, 1, 1, 1): "F",
+}
+
+
+def _validate_bits_32(bits: List[int]) -> None:
+    """Internal: ensure a 32-length 0/1 list (LSB first).
+
+    :param List[int] bits: Candidate bit list.
+    :raises ValueError: If malformed.
+    """
+    if not isinstance(bits, list):
+        raise ValueError("bits must be a list")
+    if len(bits) != 32:
+        raise ValueError("bits must contain exactly 32 elements")
+    for b in bits:
+        if b not in (0, 1):
+            raise ValueError("bits must contain only 0 or 1")
 
 
 def u32_to_bits(value: int) -> List[int]:
@@ -169,7 +215,15 @@ def u32_to_bits(value: int) -> List[int]:
     :rtype: List[int]
     :raises ValueError: If value is outside 32-bit unsigned range.
     """
-    raise NotImplementedError("u32_to_bits not implemented")
+    if not isinstance(value, int):
+        raise ValueError("value must be an int")
+    if value < 0 or value > 0xFFFF_FFFF:
+        raise ValueError("value must be in 0..0xFFFFFFFF")
+
+    bits = [0] * 32
+    for i in range(32):
+        bits[i] = (value >> i) & 1
+    return bits
 
 
 def bits_to_u32(bits: List[int]) -> int:
@@ -180,27 +234,77 @@ def bits_to_u32(bits: List[int]) -> int:
     :rtype: int
     :raises ValueError: If length != 32 or elements are not 0/1.
     """
-    raise NotImplementedError("bits_to_u32 not implemented")
+    _validate_bits_32(bits)
+    value = 0
+    for i in range(32):
+        if bits[i]:
+            value |= 1 << i
+    return value
 
 
 def pretty_bin32(bits: List[int]) -> str:
-    """Return a grouped binary string like ``00000000_..._XXXXXXXX`` (32 bits).
+    """Return a grouped binary string like ``00000000_00000000_00000000_00000000``.
+
+    Bytes are grouped from MSB to LSB, separated by underscores,
+    with each byte printed MSB-first inside the group.
 
     :param List[int] bits: 32-bit list, LSB first.
     :returns: Human-friendly grouped binary string.
     :rtype: str
     """
-    raise NotImplementedError("pretty_bin32 not implemented")
+    _validate_bits_32(bits)
+    msb_first = "".join("1" if b else "0" for b in reversed(bits))
+    groups = [msb_first[i : i + 8] for i in range(0, 32, 8)]
+    return "_".join(groups)
 
 
 def pretty_hex32(bits: List[int]) -> str:
-    """Return a zero-padded hex string like ``0xDEADBEEF`` (via manual nibbles).
+    """Return a zero-padded hex string like ``0xDEADBEEF`` (manual nibbles).
 
     :param List[int] bits: 32-bit list, LSB first.
     :returns: Hex string with prefix ``0x``.
     :rtype: str
     """
-    raise NotImplementedError("pretty_hex32 not implemented")```
+    _validate_bits_32(bits)
+    msb_first = list(reversed(bits))
+    hex_chars: List[str] = []
+    for i in range(0, 32, 4):
+        n4 = tuple(int(c) for c in msb_first[i : i + 4])
+        if len(n4) != 4:
+            raise ValueError("internal error: nibble length != 4")
+        hex_chars.append(_NIBBLE_TO_HEX[n4])
+    return "0x" + "".join(hex_chars)
+
+
+def main() -> int:
+    """Small demo you can run by executing this file directly."""
+    from midterm_440.numeric_core.bits import (
+        bits_to_u32,
+        pretty_bin32,
+        pretty_hex32,
+        u32_to_bits,
+    )
+
+    b = u32_to_bits(0xDEADBEEF)
+    print(pretty_bin32(b))
+    print(pretty_hex32(b))
+    print(hex(bits_to_u32(b)))
+    return 0
+
+
+if __name__ == "__main__":
+
+    import sys
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    project_root = here.parents[2]
+    src_dir = project_root / "src"
+
+    if src_dir.name == "src" and src_dir.exists():
+        sys.path.insert(0, str(src_dir))
+
+    raise SystemExit(main())```
 
 ########################################
 Here is my code for fpu_f32.py BELOW:
@@ -410,63 +514,357 @@ Here is my code for twos.py BELOW:
 
 ```python
 # src/midterm_440/numeric_core/twos.py
-"""Two's-complement encode/decode and extension helpers (RV32).
+"""Two's-complement tools for 32-bit values (RV32).
 
-This module provides **width=32** two's-complement utilities and extensions.
+This file gives you simple helpers to work with signed 32-bit numbers.
+You can turn a Python int into two's-complement bits and back.
+You can also grow a smaller value to a bigger width by copying the sign
+(sign-extend) or by adding zeros (zero-extend).
 
-Overflow rules for two's-complement addition/subtraction differ from carry;
-carry-out of MSB does not imply signed overflow.
-See standard rules: adding same-sign operands that produce opposite-sign
-results indicates overflow.
-(Reference background on detection rules.)
-
+Reminder about overflow in two's-complement math:
+- Overflow is about the sign being wrong, not about the carry bit.
+- If you add two numbers with the same sign and the result flips sign,
+  that means overflow.
+Example: 0x7FFFFFFF + 1 → 0x80000000 has signed overflow.
 """
 
 from typing import Dict, List
 
+from midterm_440.numeric_core.bits import (
+    bits_to_u32,
+    pretty_bin32,
+    pretty_hex32,
+    u32_to_bits,
+)
+
+_INT32_MIN = -(1 << 31)
+_INT32_MAX = (1 << 31) - 1
+_MASK32 = 0xFFFF_FFFF
+
+
+def _validate_bit_string_32(s: str) -> str:
+    """Make sure we got a clean 32-bit '0'/'1' string. Underscores are ok.
+    Returns the cleaned 32 characters (MSB..LSB).
+    """
+    if not isinstance(s, str):
+        raise ValueError("bits_in must be a string or int")
+
+    cleaned = s.replace("_", "").strip()
+    if len(cleaned) != 32 or any(ch not in "01" for ch in cleaned):
+        raise ValueError("binary string must be 32 characters of '0'/'1'")
+    return cleaned
+
 
 def encode_twos_complement(value: int) -> Dict[str, object]:
-    """Encode a Python int into 32-bit two's complement.
+    """Turn a Python int into a 32-bit two's-complement pattern.
 
-    :param int value: Signed integer to encode.
-    :returns: Dict with keys:
-              ``bin`` (str), grouped 32-bit binary;
-              ``hex`` (str), zero-padded hex;
-              ``overflow_flag`` (int), 1 if outside signed 32-bit range.
+    :param int value: The number you want to encode (can be negative).
+    :returns: A dictionary with:
+              ``bin`` (str): 32 bits grouped like ``00000000_...``;
+              ``hex`` (str): hex string like ``0x0000000D``;
+              ``overflow_flag`` (int): 1 if value is outside -2^31..2^31-1.
     :rtype: Dict[str, object]
+
+    Example: value = -13 → bin looks like 1111...0011, hex=0xFFFFFFF3.
+
+    To get the two's-complement representation of a negative number (for an N-bit word):
+
+    Write the absolute value in binary using N bits (pad with leading zeros).
+
+    Flip every bit (0 → 1, 1 → 0).
+
+    Add 1 to the flipped result (ignore any carry beyond N bits).
+
+    Example: represent -5 in 8 bits.
+    +5 in 8 bits = 00000101.
+    Flip bits → 11111010.
+    Add 1 → 11111011 (this is -5 in 8-bit two's-complement).
+
     """
-    raise NotImplementedError("encode_twos_complement not implemented")
+    if not isinstance(value, int):
+        raise ValueError("value must be an int")
+    overflow = 0 if (_INT32_MIN <= value <= _INT32_MAX) else 1
+    unsigned = value & _MASK32
+    bits = u32_to_bits(unsigned)
+    return {
+        "bin": pretty_bin32(bits),
+        "hex": pretty_hex32(bits),
+        "overflow_flag": overflow,
+    }
 
 
 def decode_twos_complement(bits_in: object) -> Dict[str, int]:
-    """Decode a 32-bit pattern (string or int) as a signed value.
+    """Read a 32-bit pattern and return the signed value.
 
-    :param object bits_in: Either a 32-bit binary string or 32-bit unsigned int.
-    :returns: ``{'value': int}`` the decoded signed integer in range [-2**31, 2**31-1].
+    :param object bits_in: A 32-char '0'/'1' string (underscores ok)
+                           or an unsigned 32-bit integer.
+    :returns: ``{'value': int}`` in [-2**31, 2**31-1].
     :rtype: Dict[str, int]
+
+    Tip: If the top bit (bit 31) is 1, the number is negative.
     """
-    raise NotImplementedError("decode_twos_complement not implemented")
+    if isinstance(bits_in, str):
+        cleaned = _validate_bit_string_32(bits_in)
+        bits = [1 if cleaned[31 - i] == "1" else 0 for i in range(32)]
+        u = bits_to_u32(bits)
+    elif isinstance(bits_in, int):
+        if bits_in < 0 or bits_in > _MASK32:
+            raise ValueError("integer input must be in 0..0xFFFFFFFF")
+        u = bits_in
+    else:
+        raise ValueError("bits_in must be a 32-bit binary string or unsigned int")
+
+    value = u if (u & (1 << 31)) == 0 else (u - (1 << 32))
+    return {"value": value}
 
 
 def sign_extend(bits: List[int], from_width: int, to_width: int) -> List[int]:
-    """Sign-extend a bit list from ``from_width`` to ``to_width``.
+    """Grow a value by copying its sign bit.
 
-    :param List[int] bits: Source bits (LSB first).
-    :param int from_width: Current meaningful width of ``bits``.
-    :param int to_width: Target width; must be >= ``from_width``.
-    :returns: New list of length ``to_width`` with sign replicated.
-    :rtype: List[int]
+    :param List[int] bits: Bits are LSB first (bits[0] is the rightmost bit).
+    :param int from_width: How many low bits are the “real” value now.
+    :param int to_width: New width (must be >= from_width).
+    :returns: New list with length ``to_width``.
+
+    Why this works: in two's complement, repeating the top bit keeps the value.
+    (If sign=1, we fill with 1s; if sign=0, we fill with 0s.)
     """
-    raise NotImplementedError("sign_extend not implemented")
+    if not isinstance(bits, list) or any(b not in (0, 1) for b in bits):
+        raise ValueError("bits must be a list of 0/1")
+    if not (1 <= from_width <= len(bits)):
+        raise ValueError("from_width must be in 1..len(bits)")
+    if to_width < from_width:
+        raise ValueError("to_width must be >= from_width")
+
+    sign = bits[from_width - 1]
+    out = bits[:from_width] + [sign] * (to_width - from_width)
+    return out[:to_width]
 
 
 def zero_extend(bits: List[int], from_width: int, to_width: int) -> List[int]:
-    """Zero-extend a bit list from ``from_width`` to ``to_width``.
+    """Grow a value by adding zeros on the left.
 
-    :param List[int] bits: Source bits (LSB first).
-    :param int from_width: Current meaningful width of ``bits``.
-    :param int to_width: Target width; must be >= ``from_width``.
-    :returns: New list zero-padded to ``to_width``.
-    :rtype: List[int]
+    :param List[int] bits: Bits are LSB first (bits[0] is the rightmost bit).
+    :param int from_width: How many low bits are the “real” value now.
+    :param int to_width: New width (must be >= from_width).
+    :returns: New list with length ``to_width``.
+
+    Use this when you want an unsigned view or you know the value is non-negative.
     """
-    raise NotImplementedError("zero_extend not implemented")```
+    if not isinstance(bits, list) or any(b not in (0, 1) for b in bits):
+        raise ValueError("bits must be a list of 0/1")
+    if not (1 <= from_width <= len(bits)):
+        raise ValueError("from_width must be in 1..len(bits)")
+    if to_width < from_width:
+        raise ValueError("to_width must be >= from_width")
+
+    out = bits[:from_width] + [0] * (to_width - from_width)
+    return out[:to_width]
+
+
+def main() -> int:
+    """Small demo so you can run this file directly.
+
+    This only runs when you execute the module as a script,
+    not when you import it in other code.
+    """
+    print(encode_twos_complement(13))
+    print(encode_twos_complement(-13))
+    print(decode_twos_complement("00000000_00000000_00000000_00001101"))
+    print(decode_twos_complement("11111111_11111111_11111111_11110011"))
+    b = u32_to_bits(0xAB)
+    print(sign_extend(b, 8, 12))
+    print(zero_extend(b, 8, 12))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())```
+
+########################################
+Here is my code for __init__.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for conftest.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for test_alu.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for test_bits.py BELOW:
+########################################
+
+```python
+# tests/unit/test_bits.py
+import pytest
+
+from midterm_440.numeric_core.bits import (
+    bits_to_u32,
+    pretty_bin32,
+    pretty_hex32,
+    u32_to_bits,
+)
+
+
+class TestBits:
+    def test_round_trip_zero(self):
+        b = u32_to_bits(0)
+        assert len(b) == 32 and all(x in (0, 1) for x in b)
+        assert bits_to_u32(b) == 0
+
+    def test_round_trip_max(self):
+        val = 0xFFFF_FFFF
+        b = u32_to_bits(val)
+        assert bits_to_u32(b) == val
+
+    def test_specific_value_deadbeef(self):
+        val = 0xDEAD_BEEF
+        b = u32_to_bits(val)
+        bin_str = pretty_bin32(b)
+        assert isinstance(bin_str, str) and len(bin_str.replace("_", "")) == 32
+        assert pretty_hex32(b) == "0xDEADBEEF"
+        assert bits_to_u32(b) == val
+
+    def test_invalid_range_negative(self):
+        with pytest.raises(ValueError):
+            u32_to_bits(-1)
+
+    def test_invalid_range_too_large(self):
+        with pytest.raises(ValueError):
+            u32_to_bits(0x1_0000_0000)
+
+    def test_bits_validation_length(self):
+        with pytest.raises(ValueError):
+            bits_to_u32([0, 1])
+
+    def test_bits_validation_values(self):
+        bad = [0] * 31 + [2]
+        with pytest.raises(ValueError):
+            bits_to_u32(bad)
+
+    def test_formatting_zero(self):
+        b = u32_to_bits(0)
+        assert pretty_hex32(b) == "0x00000000"
+        assert pretty_bin32(b) == "00000000_00000000_00000000_00000000"```
+
+########################################
+Here is my code for test_fpu_f32.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for test_mdu.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for test_twos.py BELOW:
+########################################
+
+```python
+# tests/unit/test_twos.py
+import pytest
+
+from midterm_440.numeric_core.bits import u32_to_bits
+from midterm_440.numeric_core.twos import (
+    decode_twos_complement,
+    encode_twos_complement,
+    sign_extend,
+    zero_extend,
+)
+
+
+def test_encode_positive():
+    out = encode_twos_complement(13)
+    assert out["overflow_flag"] == 0
+    assert out["hex"] == "0x0000000D"
+    assert out["bin"].endswith("00001101")
+
+
+def test_encode_negative():
+    out = encode_twos_complement(-13)
+    assert out["overflow_flag"] == 0
+    assert out["hex"] == "0xFFFFFFF3"
+    assert out["bin"].endswith("11110011")
+
+
+def test_encode_overflow_high():
+    out = encode_twos_complement(1 << 31)
+    assert out["overflow_flag"] == 1
+    assert out["hex"] == "0x80000000"
+
+
+def test_decode_from_binary_string_positive():
+    val = decode_twos_complement("00000000_00000000_00000000_00001101")["value"]
+    assert val == 13
+
+
+def test_decode_from_binary_string_negative():
+    val = decode_twos_complement("11111111_11111111_11111111_11110011")["value"]
+    assert val == -13
+
+
+def test_decode_from_int_unsigned():
+    val = decode_twos_complement(0x80000000)["value"]
+    assert val == -2147483648
+
+
+def test_sign_extend_keep_positive():
+    b = u32_to_bits(0x7B)
+    out = sign_extend(b, 8, 12)
+    assert len(out) == 12
+    assert out[11] == 0 and out[10] == 0 and out[9] == 0 and out[8] == 0
+
+
+def test_sign_extend_keep_negative():
+    b = u32_to_bits(0xAB)
+    out = sign_extend(b, 8, 12)
+    assert out[11] == 1 and out[10] == 1 and out[9] == 1 and out[8] == 1
+
+
+def test_zero_extend_simple():
+    b = u32_to_bits(0xAB)
+    out = zero_extend(b, 8, 12)
+    assert out[11] == 0 and out[10] == 0 and out[9] == 0 and out[8] == 0
+
+
+def test_decode_bad_string_length():
+    with pytest.raises(ValueError):
+        decode_twos_complement("1010")
+
+
+def test_decode_bad_int_range():
+    with pytest.raises(ValueError):
+        decode_twos_complement(0x1_0000_0000)
+
+
+def test_sign_extend_bad_widths():
+    b = [0] * 32
+    with pytest.raises(ValueError):
+        sign_extend(b, 0, 12)
+    with pytest.raises(ValueError):
+        sign_extend(b, 8, 4)
+
+
+def test_zero_extend_bad_bits():
+    bad = [0] * 31 + [2]
+    with pytest.raises(ValueError):
+        zero_extend(bad, 8, 12)
+
+```

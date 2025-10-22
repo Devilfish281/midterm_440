@@ -12,7 +12,10 @@ Reminder about overflow in two's-complement math:
   that means overflow.
 Example: 0x7FFFFFFF + 1 → 0x80000000 has signed overflow.
 """
-
+# to run test, use:
+# poetry run pytest -q tests\unit\test_twos.py
+# to run all tests, use:
+# poetry run pytest -q
 from typing import Dict, List
 
 from midterm_440.numeric_core.bits import (

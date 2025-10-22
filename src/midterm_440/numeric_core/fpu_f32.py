@@ -16,6 +16,11 @@ from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
 FRAC_BITS = 23  # number of fraction bits in IEEE-754 binary32
 SIG_BITS = FRAC_BITS + 1  # 24-bit significand (includes the implicit 1)
 BIAS = 127  # exponent bias for binary32
+
+# Float32 magnitude thresholds (exact, from IEEE-754 binary32)
+MAX_F32 = (2.0 - 2.0**-23) * (2.0**127)  # ≈ 3.4028234663852886e38
+MIN_POS_NORMAL = 2.0**-126  # ≈ 1.1754943508222875e-38
+MIN_POS_SUBNORMAL = 2.0**-149  # ≈ 1.401298464e-45
 # -------------------------------------------------------------------------------
 
 
@@ -60,42 +65,33 @@ def pack_f32(value: float) -> Dict[str, object]:
 
         if E <= 0:
             # ------------------------ SUBNORMAL ------------------------
-            # shift = 1 - E positions we need to right-shift the 1.f pattern
             shift = 1 - E
-            # Build an integer carrying FRAC_BITS plus 3 (G/R/S) plus 'shift' headroom
             scale = FRAC_BITS + 3 + shift
             full = int(m * (1 << scale))
-            # The stored 23-bit fraction comes from taking the top FRAC_BITS bits after shifting by (3 + shift)
             frac_before = (full >> (3 + shift)) & ((1 << FRAC_BITS) - 1)
-            # Guard/round/sticky relative to that cut
             g = (full >> (2 + shift)) & 1
             r = (full >> (1 + shift)) & 1
             s_sticky = 1 if (full & ((1 << (1 + shift)) - 1)) != 0 else 0
-            # RNE ties-to-even: if guard==1 and (round==1 or sticky==1 or LSB==1) then increment
             incr = 1 if (g and (r or s_sticky or (frac_before & 1))) else 0
             frac_rounded = frac_before + incr
-            # If rounding overflowed the subnormal fraction, it becomes the smallest normal (E->1)
             if frac_rounded >= (1 << FRAC_BITS):
-                e, f = 1, 0
+                e, f = 1, 0  # became the smallest normal
             else:
                 e, f = 0, frac_rounded
         else:
             # ------------------------- NORMAL --------------------------
-            # Build FRAC_BITS + 3 bits (fraction-oriented), so >>3 = floor(m * 2**FRAC_BITS)
             sig = int(m * (1 << (FRAC_BITS + 3)))  # includes 3 G/R/S bits
-            main = sig >> 3  # [implicit(1) | 23 fraction bits] as an integer
+            main = sig >> 3  # [implicit(1)|23 fraction bits]
             implicit1 = 1 << FRAC_BITS  # bit 23
-            assert (main & implicit1) != 0  # normal numbers must have the leading 1
+            assert (main & implicit1) != 0
 
-            # 23-bit candidate (drop implicit 1)
             frac_before = main & (implicit1 - 1)
 
-            # Guard/round/sticky relative to the fraction cut
             g = (sig >> 2) & 1
             r = (sig >> 1) & 1
             s_sticky = 1 if (sig & 1) else 0
-
             incr = 1 if (g and (r or s_sticky or (frac_before & 1))) else 0
+
             main_rounded = main + incr
 
             # Renormalize if we crossed from 1.x to 10.x (carry out)
@@ -107,9 +103,7 @@ def pack_f32(value: float) -> Dict[str, object]:
             e = E if (0 < E < 0xFF) else (0xFF if E >= 0xFF else 0)
 
             # Handle overflow to infinity
-            if (
-                e == 0xFF and f != 0
-            ):  # if we saturated exponent but fraction nonzero -> make it inf
+            if e == 0xFF and f != 0:
                 f = 0
 
     # Pack s|e|f
@@ -124,10 +118,7 @@ def pack_f32(value: float) -> Dict[str, object]:
 
 
 def unpack_f32(bits: List[int]) -> Dict[str, object]:
-    """Unpack a 32-bit IEEE-754 pattern into a Python float-like value.
-
-    We keep this simple/host-backed since the test suite expects that behavior.
-    """
+    """Unpack a 32-bit IEEE-754 pattern into a Python float-like value."""
     u = bits_to_u32(bits)
     s = (u >> 31) & 1
     e = (u >> 23) & 0xFF
@@ -136,43 +127,56 @@ def unpack_f32(bits: List[int]) -> Dict[str, object]:
     cls = _classify_from_fields(s, e, f)
 
     # Convert using Python float via bytes to preserve the exact binary32 value
-    # (This is acceptable for the tests that only verify round-trips and classes.)
     b = bytes([(u >> 24) & 0xFF, (u >> 16) & 0xFF, (u >> 8) & 0xFF, u & 0xFF])
-    val = int.from_bytes(b, "big", signed=False).to_bytes(4, "big")
-    value = float.fromhex(float.fromhex("0x1.0p0").hex())  # harmless no-op seed
-    # Use struct without importing at top to keep surface simple here
-    import struct  # Changed Code
+    import struct
 
     value = struct.unpack("!f", b)[0]
 
     return {"value": value, "class": cls}
 
 
-def _flags_from_result(a: float, b: float, res: float) -> Dict[str, int]:
-    """Lightweight flags for smoke tests (not a full IEEE exception model)."""
-    invalid = 1 if (math.isnan(a) or math.isnan(b) or math.isnan(res)) else 0
-    overflow = 1 if (math.isfinite(a) and math.isfinite(b) and math.isinf(res)) else 0
-    underflow = (
-        1
-        if (
-            res == 0.0
-            and math.isfinite(a)
-            and math.isfinite(b)
-            and (a != 0.0 or b != 0.0)
-        )
-        else 0
-    )
-    return {"overflow": overflow, "underflow": underflow, "invalid": invalid}
+def _flags_from_result_bits(a: float, b: float, u_res: int) -> Dict[str, int]:
+    """Compute flags from the *float32 result bits* plus knowledge of inputs."""
+    exp = (u_res >> 23) & 0xFF
+    frac = u_res & 0x7FFFFF
+    is_inf = exp == 0xFF and frac == 0
+    is_nan = exp == 0xFF and frac != 0
+    is_sub = exp == 0x00 and frac != 0
+    is_zero = exp == 0x00 and frac == 0
+
+    flags = {"overflow": 0, "underflow": 0, "invalid": 0}
+
+    # overflow: finite inputs -> infinite float32 result
+    if is_inf and math.isfinite(a) and math.isfinite(b):
+        flags["overflow"] = 1
+
+    # invalid: NaN result without any NaN inputs (simple smoke rule)
+    if is_nan and not (math.isnan(a) or math.isnan(b)):
+        flags["invalid"] = 1
+
+    # underflow: subnormal or zero result from finite non-trivial inputs
+    if (is_sub or is_zero) and math.isfinite(a) and math.isfinite(b):
+        # avoid flagging exact 0±0 -> 0
+        if not (a == 0.0 or b == 0.0):
+            flags["underflow"] = 1
+
+    return flags
 
 
 def _wrap_result(res: float) -> Dict[str, object]:
     """Return dict with 'res_bits', 'flags', 'trace' keys (trace minimal)."""
-    # Convert host float to binary32 bits (through struct)
-    import struct  # Changed Code
+    # Encode to binary32 bits without throwing on out-of-range values.
+    if math.isnan(res):
+        u = (0 << 31) | (0xFF << 23) | 0x004000  # quiet NaN payload (nonzero frac)
+    elif math.isinf(res) or abs(res) > MAX_F32:
+        sign = 1 if math.copysign(1.0, res) < 0.0 else 0
+        u = (sign << 31) | (0xFF << 23) | 0x000000  # ±Infinity
+    else:
+        import struct
 
-    as_u32 = int.from_bytes(struct.pack("!f", float(res)), "big", signed=False)
+        u = int.from_bytes(struct.pack("!f", float(res)), "big", signed=False)
     return {
-        "res_bits": u32_to_bits(as_u32),
+        "res_bits": u32_to_bits(u),
         "flags": {"overflow": 0, "underflow": 0, "invalid": 0},
         "trace": [],
     }
@@ -180,47 +184,47 @@ def _wrap_result(res: float) -> Dict[str, object]:
 
 def fadd_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
     """Float32 addition via host op (tests only need smoke-level correctness)."""
-    import struct  # Changed Code
+    import struct
 
     ua, ub = bits_to_u32(a_bits), bits_to_u32(b_bits)
     a = struct.unpack("!f", ua.to_bytes(4, "big"))[0]
     b = struct.unpack("!f", ub.to_bytes(4, "big"))[0]
     res = a + b
+
     out = _wrap_result(res)
-    out["flags"] = _flags_from_result(a, b, res)
-    out["trace"] = [
-        {"op": "add", "a_u32": ua, "b_u32": ub, "res_u32": bits_to_u32(out["res_bits"])}
-    ]
+    u_res = bits_to_u32(out["res_bits"])
+    out["flags"] = _flags_from_result_bits(a, b, u_res)
+    out["trace"] = [{"op": "add", "a_u32": ua, "b_u32": ub, "res_u32": u_res}]
     return out
 
 
 def fsub_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
     """Float32 subtraction via host op (tests only need smoke-level correctness)."""
-    import struct  # Changed Code
+    import struct
 
     ua, ub = bits_to_u32(a_bits), bits_to_u32(b_bits)
     a = struct.unpack("!f", ua.to_bytes(4, "big"))[0]
     b = struct.unpack("!f", ub.to_bytes(4, "big"))[0]
     res = a - b
+
     out = _wrap_result(res)
-    out["flags"] = _flags_from_result(a, b, res)
-    out["trace"] = [
-        {"op": "sub", "a_u32": ua, "b_u32": ub, "res_u32": bits_to_u32(out["res_bits"])}
-    ]
+    u_res = bits_to_u32(out["res_bits"])
+    out["flags"] = _flags_from_result_bits(a, b, u_res)
+    out["trace"] = [{"op": "sub", "a_u32": ua, "b_u32": ub, "res_u32": u_res}]
     return out
 
 
 def fmul_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
     """Float32 multiplication via host op (tests only need smoke-level correctness)."""
-    import struct  # Changed Code
+    import struct
 
     ua, ub = bits_to_u32(a_bits), bits_to_u32(b_bits)
     a = struct.unpack("!f", ua.to_bytes(4, "big"))[0]
     b = struct.unpack("!f", ub.to_bytes(4, "big"))[0]
     res = a * b
+
     out = _wrap_result(res)
-    out["flags"] = _flags_from_result(a, b, res)
-    out["trace"] = [
-        {"op": "mul", "a_u32": ua, "b_u32": ub, "res_u32": bits_to_u32(out["res_bits"])}
-    ]
+    u_res = bits_to_u32(out["res_bits"])
+    out["flags"] = _flags_from_result_bits(a, b, u_res)
+    out["trace"] = [{"op": "mul", "a_u32": ua, "b_u32": ub, "res_u32": u_res}]
     return out

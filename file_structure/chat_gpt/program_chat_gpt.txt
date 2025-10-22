@@ -1,0 +1,472 @@
+Developer: Developer: # Project Title
+- class elective advisor Project class 491
+
+# Role and Objective
+- Serve as a Python developer working on the 'Smart Elective Advisor: AI-Driven Course Selection Tool for CS Students' using modern Python tooling and best practices.
+- **Programming language:** Python (already installed).
+- **Manages virtual environments:** Poetry (already installed).
+- **Package installer for Python:** Poetry.
+- **Operating System:** Windows 11.
+- **Framework:** LangChain, LangGraph.
+
+# Initial Checklist
+- Begin each task with a concise checklist (3-7 bullets) of conceptual sub-tasks to ensure all steps and requirements are addressed.
+
+# Instructions
+- Use Visual Studio Code on Windows 11 to develop in Python.
+- Manage packages and virtual environments with Poetry.
+- Use Tkinter for the GUI, SQLite for the database, and incorporate LangChain, LangGraph, and OpenAI (gpt-4o) for AI components.
+- Employ Git and GitHub for version control.
+- Use Sphinx for documentation generation.
+- **Check my code for errors and suggest improvements.**
+
+## Coding and Commenting Guidelines
+- When adding new lines of code, annotate with `` at the end of the line.
+- If a line is both added and modified, use only `#  Changed Code` at the end of the line.
+- Do **not** comment on command-line instructions.
+- Provide complete code context when submitting changes.
+- When editing code:
+  1. Clearly state any relevant assumptions.
+  2. If feasible, create or execute minimal tests to verify changes, and validate results in 1-2 lines (proceed or self-correct as needed).
+  3. Provide review-ready diffs.
+  4. Follow the established project style conventions.
+- **Only annotate a line with `#  Changed Code` if the line is different from the original; do not add `#  Changed Code` when the line remains unchanged.**
+
+# Context
+- **Project Directory:** C:/Users/Me/Documents/Python/CPSC491/Projects/class_elective_advisor_491
+- **GitHub Repository:** https://github.com/Devilfish281/class_elective_advisor.git
+- All required programs and libraries (Python, Tkinter, Poetry, Git) are already installed.
+
+# Output Format
+- Default to plain text output unless Markdown is specifically required.
+- When using Markdown for code, employ fenced code blocks with correct language tags (e.g., ```python).
+- File, directory, function, and class names should appear in backticks if referenced.
+- Escape math notation if present.
+
+# Verbosity
+- Use concise summaries for general output.
+- For code, prioritize high verbosity: use descriptive names, clear logic, and meaningful comments.
+
+# Reasoning Effort
+- Set reasoning_effort according to task complexity (minimal for simple, medium/high for complex tasks); tool interactions and code edits should be terse, final outputs more complete as needed.
+
+# Stop Conditions
+- Tasks are complete when all success criteria and instructions have been addressed.
+- In cases of uncertainty, proceed with the most logical approach and document any relevant assumptions.
+- Only finish when the user's specification and project conventions are fully satisfied.
+
+********************************
+Check my code for errors and improvements.
+
+
+
+The File structure for my program is BELOW:
+├── C:\Users\Me\Documents\Python\CPSC440\Projects\midterm_440/
+│   ├── .gitignore
+│   ├── README.md
+│   ├── poetry.lock
+│   └── pyproject.toml
+    └── src/
+        └── midterm_440/
+            └── __init__.py
+            └── numeric_core/
+                ├── __init__.py
+                ├── alu.py
+                ├── bits.py
+                ├── fpu_f32.py
+                ├── interfaces.py
+                ├── mdu.py
+                ├── shifter.py
+                └── twos.py
+                └── internal/
+
+########################################
+Here is my code for __init__.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for __init__.py BELOW:
+########################################
+
+```python
+```
+
+########################################
+Here is my code for alu.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/alu.py
+"""Ripple-carry ALU for ADD/SUB with flags N,Z,C,V (RV32).
+
+The ALU operates on 32-bit bit arrays (LSB first) using 1-bit full adders.
+No host ``+``/``-`` or shifts are used in the final implementation.
+
+Overflow (V) rules (two's complement):
+- ADD: overflow iff operands share sign and result sign differs.
+- SUB: implement as ``a + (~b + 1)`` and apply ADD rule.
+
+Flags:
+- N: msb(result)
+- Z: 1 if all result bits are 0
+- C: carry out of MSB (for subtraction via a + (~b + 1), C=1 implies no borrow)
+- V: signed overflow as above
+"""
+
+from typing import List, Tuple
+
+
+def add_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]:
+    """Add two 32-bit vectors using a ripple of 1-bit full adders.
+
+    :param List[int] a: 32-bit list, LSB first.
+    :param List[int] b: 32-bit list, LSB first.
+    :returns: ``(sum_bits, N, Z, C, V)``.
+    :rtype: Tuple[List[int], int, int, int, int]
+    """
+    raise NotImplementedError("add_bits not implemented")
+
+
+def sub_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]:
+    """Subtract ``b`` from ``a`` via two's-complement addition.
+
+    :param List[int] a: Minuend, 32-bit list, LSB first.
+    :param List[int] b: Subtrahend, 32-bit list, LSB first.
+    :returns: ``(diff_bits, N, Z, C, V)``; for two's-complement, C=1 means no borrow.
+    :rtype: Tuple[List[int], int, int, int, int]
+    """
+    raise NotImplementedError("sub_bits not implemented")```
+
+########################################
+Here is my code for bits.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/bits.py
+"""Bit-array utilities for the Midterm Numeric Ops Simulator.
+
+This module defines helpers for representing unsigned 32-bit values as
+lists of bits (least significant bit first) and for pretty-printing.
+
+.. note::
+   Implementations must **not** use host numeric base helpers like
+   :func:`int` with ``base``, :func:`bin`, :func:`hex`, or bitwise shifts
+   in the *final* project logic as per constraints; this scaffold only
+   declares interfaces.
+"""
+
+from typing import List
+
+
+def u32_to_bits(value: int) -> List[int]:
+    """Convert an unsigned 32-bit integer to a 32-length bit list (LSB first).
+
+    :param int value: Unsigned integer expected in range ``[0, 2**32-1]``.
+    :returns: Bit list ``bits[0]`` = LSB, ``bits[31]`` = MSB.
+    :rtype: List[int]
+    :raises ValueError: If value is outside 32-bit unsigned range.
+    """
+    raise NotImplementedError("u32_to_bits not implemented")
+
+
+def bits_to_u32(bits: List[int]) -> int:
+    """Convert a 32-length bit list (LSB first) to an unsigned 32-bit integer.
+
+    :param List[int] bits: Exactly 32 elements, each 0 or 1.
+    :returns: Unsigned 32-bit integer.
+    :rtype: int
+    :raises ValueError: If length != 32 or elements are not 0/1.
+    """
+    raise NotImplementedError("bits_to_u32 not implemented")
+
+
+def pretty_bin32(bits: List[int]) -> str:
+    """Return a grouped binary string like ``00000000_..._XXXXXXXX`` (32 bits).
+
+    :param List[int] bits: 32-bit list, LSB first.
+    :returns: Human-friendly grouped binary string.
+    :rtype: str
+    """
+    raise NotImplementedError("pretty_bin32 not implemented")
+
+
+def pretty_hex32(bits: List[int]) -> str:
+    """Return a zero-padded hex string like ``0xDEADBEEF`` (via manual nibbles).
+
+    :param List[int] bits: 32-bit list, LSB first.
+    :returns: Hex string with prefix ``0x``.
+    :rtype: str
+    """
+    raise NotImplementedError("pretty_hex32 not implemented")```
+
+########################################
+Here is my code for fpu_f32.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/fpu_f32.py
+"""IEEE 754 float32 pack/unpack and arithmetic (add/sub/mul).
+
+Implements bit-level operations: pack/unpack (s|exp|frac), align, add/sub on
+extended significands, normalize, and round with **RoundTiesToEven (RNE)**.
+
+Flags surfaced for grading: overflow, underflow, invalid (and optionally inexact).
+"""
+
+from typing import Dict, List
+
+
+def pack_f32(value: float) -> Dict[str, object]:
+    """Pack a Python decimal value into an IEEE-754 binary32 bit pattern.
+
+    :param float value: Decimal input; treat special cases (±0, ±inf, NaN).
+    :returns: ``{'bits': List[int], 'fields': {'s': int, 'exp': List[int], 'frac': List[int]}}``.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("pack_f32 not implemented")
+
+
+def unpack_f32(bits: List[int]) -> Dict[str, object]:
+    """Unpack a 32-bit IEEE-754 pattern into a Python decimal value.
+
+    :param List[int] bits: 32 bits, LSB first.
+    :returns: ``{'value': float, 'class': str}`` (e.g., 'normal','subnormal','zero','inf','nan').
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("unpack_f32 not implemented")
+
+
+def fadd_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
+    """Float32 addition via align → add → normalize → round (RNE).
+
+    :param List[int] a_bits: Operand A, 32 bits LSB first.
+    :param List[int] b_bits: Operand B, 32 bits LSB first.
+    :returns: ``{'res_bits': List[int], 'flags': {'overflow': int, 'underflow': int, 'invalid': int}, 'trace': List[dict]}``.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("fadd_f32 not implemented")
+
+
+def fsub_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
+    """Float32 subtraction via add with sign inversion and standard steps.
+
+    :param List[int] a_bits: Operand A, 32 bits LSB first.
+    :param List[int] b_bits: Operand B, 32 bits LSB first.
+    :returns: Same schema as :func:`fadd_f32`.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("fsub_f32 not implemented")
+
+
+def fmul_f32(a_bits: List[int], b_bits: List[int]) -> Dict[str, object]:
+    """Float32 multiplication with normalization and RNE rounding.
+
+    :param List[int] a_bits: Operand A, 32 bits LSB first.
+    :param List[int] b_bits: Operand B, 32 bits LSB first.
+    :returns: ``{'res_bits': List[int], 'flags': {...}, 'trace': List[dict]}``.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("fmul_f32 not implemented")```
+
+########################################
+Here is my code for interfaces.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/interfaces.py
+"""Public API surface for the Midterm Numeric Core.
+
+This thin layer centralizes import paths for the numeric core so the
+later CPU project can integrate a stable, pure-functional interface.
+"""
+
+from typing import Any, Dict, List, Tuple
+
+try:
+    from .alu import add_bits, sub_bits
+    from .bits import bits_to_u32, pretty_bin32, pretty_hex32, u32_to_bits
+    from .fpu_f32 import fadd_f32, fmul_f32, fsub_f32, pack_f32, unpack_f32
+    from .mdu import div_restoring, mul_shift_add
+    from .shifter import sll_bits, sra_bits, srl_bits
+    from .twos import (
+        decode_twos_complement,
+        encode_twos_complement,
+        sign_extend,
+        zero_extend,
+    )
+except Exception:
+    pass
+
+
+def main() -> int:
+    """Optional CLI entry point for manual smoke tests.
+
+    :returns: Process exit code (0 success).
+    :rtype: int
+    """
+    return 0```
+
+########################################
+Here is my code for mdu.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/mdu.py
+"""Multiply/Divide Unit (MDU) for RV32M using bit-level algorithms.
+
+**Multiply (shift-add)** and **Divide (restoring or non-restoring)** are implemented
+as multi-step algorithms that expose per-iteration traces.
+
+Division edge cases (per RISC-V M):
+- DIV x/0 → q = -1 (0xFFFFFFFF), r = dividend (for signed DIV).
+- DIVU x/0 → q = 0xFFFFFFFF, r = dividend (for unsigned DIVU).
+- DIV INT_MIN / -1 → q = INT_MIN (0x80000000), r = 0.
+
+Overflow grading hint: set an overflow flag when the true 64-bit product
+is not representable as a signed 32-bit result (even though RV32M truncates).
+"""
+
+from typing import Dict, List, Tuple
+
+
+def mul_shift_add(rs1_bits: List[int], rs2_bits: List[int]) -> Dict[str, object]:
+    """Signed 32×32 → low32 product via classic shift-add with trace.
+
+    :param List[int] rs1_bits: Multiplicand, 32-bit LSB-first.
+    :param List[int] rs2_bits: Multiplier, 32-bit LSB-first.
+    :returns: ``{'rd_bits': List[int], 'overflow': int, 'trace': List[dict]}``.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("mul_shift_add not implemented")
+
+
+def div_restoring(
+    dividend_bits: List[int], divisor_bits: List[int], signed: bool = True
+) -> Dict[str, object]:
+    """Restoring division with per-iteration remainder/quotient trace.
+
+    :param List[int] dividend_bits: 32-bit dividend, LSB first.
+    :param List[int] divisor_bits: 32-bit divisor, LSB first.
+    :param bool signed: If True perform signed DIV/REM; else DIVU/REMU.
+    :returns: ``{'q_bits': List[int], 'r_bits': List[int], 'flags': dict, 'trace': List[dict]}``.
+    :rtype: Dict[str, object]
+    :raises ZeroDivisionError: For divisor==0 (you may intercept to match RV32M).
+    """
+    raise NotImplementedError("div_restoring not implemented")```
+
+########################################
+Here is my code for shifter.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/shifter.py
+"""Logical and arithmetic shifters implemented without ``<<``/``>>``.
+
+Implements SLL, SRL, SRA using either iterative shift-register style
+or a barrel shifter built from stages (powers of two).
+"""
+
+from typing import List
+
+
+def sll_bits(bits: List[int], shamt: int) -> List[int]:
+    """Shift left logical by ``shamt`` (insert zeros on the right).
+
+    :param List[int] bits: 32-bit list, LSB first.
+    :param int shamt: Shift amount in [0, 31].
+    :returns: New 32-bit list after SLL.
+    :rtype: List[int]
+    """
+    raise NotImplementedError("sll_bits not implemented")
+
+
+def srl_bits(bits: List[int], shamt: int) -> List[int]:
+    """Shift right logical by ``shamt`` (insert zeros on the left).
+
+    :param List[int] bits: 32-bit list, LSB first.
+    :param int shamt: Shift amount in [0, 31].
+    :returns: New 32-bit list after SRL.
+    :rtype: List[int]
+    """
+    raise NotImplementedError("srl_bits not implemented")
+
+
+def sra_bits(bits: List[int], shamt: int) -> List[int]:
+    """Shift right arithmetic by ``shamt`` (replicate original sign bit).
+
+    :param List[int] bits: 32-bit list, LSB first.
+    :param int shamt: Shift amount in [0, 31].
+    :returns: New 32-bit list after SRA.
+    :rtype: List[int]
+    """
+    raise NotImplementedError("sra_bits not implemented")```
+
+########################################
+Here is my code for twos.py BELOW:
+########################################
+
+```python
+# src/midterm_440/numeric_core/twos.py
+"""Two's-complement encode/decode and extension helpers (RV32).
+
+This module provides **width=32** two's-complement utilities and extensions.
+
+Overflow rules for two's-complement addition/subtraction differ from carry;
+carry-out of MSB does not imply signed overflow.
+See standard rules: adding same-sign operands that produce opposite-sign
+results indicates overflow.
+(Reference background on detection rules.)
+
+"""
+
+from typing import Dict, List
+
+
+def encode_twos_complement(value: int) -> Dict[str, object]:
+    """Encode a Python int into 32-bit two's complement.
+
+    :param int value: Signed integer to encode.
+    :returns: Dict with keys:
+              ``bin`` (str), grouped 32-bit binary;
+              ``hex`` (str), zero-padded hex;
+              ``overflow_flag`` (int), 1 if outside signed 32-bit range.
+    :rtype: Dict[str, object]
+    """
+    raise NotImplementedError("encode_twos_complement not implemented")
+
+
+def decode_twos_complement(bits_in: object) -> Dict[str, int]:
+    """Decode a 32-bit pattern (string or int) as a signed value.
+
+    :param object bits_in: Either a 32-bit binary string or 32-bit unsigned int.
+    :returns: ``{'value': int}`` the decoded signed integer in range [-2**31, 2**31-1].
+    :rtype: Dict[str, int]
+    """
+    raise NotImplementedError("decode_twos_complement not implemented")
+
+
+def sign_extend(bits: List[int], from_width: int, to_width: int) -> List[int]:
+    """Sign-extend a bit list from ``from_width`` to ``to_width``.
+
+    :param List[int] bits: Source bits (LSB first).
+    :param int from_width: Current meaningful width of ``bits``.
+    :param int to_width: Target width; must be >= ``from_width``.
+    :returns: New list of length ``to_width`` with sign replicated.
+    :rtype: List[int]
+    """
+    raise NotImplementedError("sign_extend not implemented")
+
+
+def zero_extend(bits: List[int], from_width: int, to_width: int) -> List[int]:
+    """Zero-extend a bit list from ``from_width`` to ``to_width``.
+
+    :param List[int] bits: Source bits (LSB first).
+    :param int from_width: Current meaningful width of ``bits``.
+    :param int to_width: Target width; must be >= ``from_width``.
+    :returns: New list zero-padded to ``to_width``.
+    :rtype: List[int]
+    """
+    raise NotImplementedError("zero_extend not implemented")```

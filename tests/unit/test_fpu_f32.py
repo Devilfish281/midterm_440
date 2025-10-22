@@ -1,4 +1,5 @@
 # tests/unit/test_fpu_f32.py
+# to run: poetry run pytest tests\unit\test_fpu_f32.py -q
 from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
 from midterm_440.numeric_core.fpu_f32 import (
     fadd_f32,

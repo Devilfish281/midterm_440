@@ -84,10 +84,12 @@ The File structure for my program is BELOW:
         └── conftest.py
         ├── data/
         └── unit/
+            ├── smoke_mdu.py
             ├── test_alu.py
             ├── test_bits.py
             ├── test_fpu_f32.py
             ├── test_mdu.py
+            ├── test_shifter.py
             └── test_twos.py
 
 ########################################
@@ -129,6 +131,43 @@ Flags:
 from typing import List, Tuple
 
 
+def _validate_bits_32(a: List[int], b: List[int]) -> None:
+    """Quick checks: lists, 32 bits, only 0/1."""
+    if not (isinstance(a, list) and isinstance(b, list)):
+        raise ValueError("a and b must be lists")
+    if len(a) != 32 or len(b) != 32:
+        raise ValueError("a and b must be 32 bits long")
+    for x in a + b:
+        if x not in (0, 1):
+            raise ValueError("bits must be 0/1")
+
+
+def _add_bits_with_cin(
+    a: List[int], b: List[int], cin0: int
+) -> Tuple[List[int], int, int, int, int]:
+    """Full-adder ripple with selectable initial carry-in (0 or 1)."""
+    _validate_bits_32(a, b)
+    out = [0] * 32
+    cin = cin0
+    carry_into_msb = 0
+    for i in range(32):
+        ai = a[i]
+        bi = b[i]
+        axb = ai ^ bi
+        s = axb ^ cin
+        cout = (ai & bi) | (cin & axb)
+        out[i] = s
+        if i == 31:
+            carry_into_msb = cin
+            carry_out_msb = cout
+        cin = cout
+    N = out[31]
+    Z = 1 if all(bit == 0 for bit in out) else 0
+    C = cin
+    V = 1 if carry_into_msb != carry_out_msb else 0
+    return out, N, Z, C, V
+
+
 def add_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]:
     """Add two 32-bit vectors using a ripple of 1-bit full adders.
 
@@ -137,7 +176,12 @@ def add_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]
     :returns: ``(sum_bits, N, Z, C, V)``.
     :rtype: Tuple[List[int], int, int, int, int]
     """
-    raise NotImplementedError("add_bits not implemented")
+    return _add_bits_with_cin(a, b, 0)
+
+
+def _invert_bits(bits: List[int]) -> List[int]:
+    """Bitwise NOT for 0/1 lists."""
+    return [0 if b == 1 else 1 for b in bits]
 
 
 def sub_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]:
@@ -148,7 +192,10 @@ def sub_bits(a: List[int], b: List[int]) -> Tuple[List[int], int, int, int, int]
     :returns: ``(diff_bits, N, Z, C, V)``; for two's-complement, C=1 means no borrow.
     :rtype: Tuple[List[int], int, int, int, int]
     """
-    raise NotImplementedError("sub_bits not implemented")```
+    _validate_bits_32(a, b)
+    b_inv = _invert_bits(b)
+    diff, N, Z, C, V = _add_bits_with_cin(a, b_inv, 1)
+    return diff, N, Z, C, V```
 
 ########################################
 Here is my code for bits.py BELOW:
@@ -421,45 +468,253 @@ Here is my code for mdu.py BELOW:
 # src/midterm_440/numeric_core/mdu.py
 """Multiply/Divide Unit (MDU) for RV32M using bit-level algorithms.
 
-**Multiply (shift-add)** and **Divide (restoring or non-restoring)** are implemented
-as multi-step algorithms that expose per-iteration traces.
+We do classic **shift-add** for MUL and **restoring division** for DIV.
+Everything uses 0/1 lists (LSB first) and ripple-carry adders.
 
-Division edge cases (per RISC-V M):
-- DIV x/0 → q = -1 (0xFFFFFFFF), r = dividend (for signed DIV).
-- DIVU x/0 → q = 0xFFFFFFFF, r = dividend (for unsigned DIVU).
-- DIV INT_MIN / -1 → q = INT_MIN (0x80000000), r = 0.
-
-Overflow grading hint: set an overflow flag when the true 64-bit product
-is not representable as a signed 32-bit result (even though RV32M truncates).
+RISC-V DIV rules to cover in flags/edges (summarized):
+- DIV/DIVU by zero => quotient all 1s (0xFFFFFFFF), remainder = dividend.
+- Signed DIV of INT_MIN by -1 => quotient INT_MIN, remainder 0 (saturates).
+These match the M extension semantics.
+(See RISC-V M docs and guides.)
 """
-
 from typing import Dict, List, Tuple
+
+from midterm_440.numeric_core.alu import add_bits, sub_bits
+from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
+from midterm_440.numeric_core.shifter import sll_bits, srl_bits
+
+MASK32 = 0xFFFF_FFFF
+INT32_MIN = 0x80000000
+
+
+def _check32(bits: List[int]) -> None:
+    if not isinstance(bits, list) or len(bits) != 32:
+        raise ValueError("need 32 bits")
+    for b in bits:
+        if b not in (0, 1):
+            raise ValueError("bits must be 0/1")
+
+
+def _not_bits(bits: List[int]) -> List[int]:
+    return [0 if b == 1 else 1 for b in bits]
+
+
+def _add_n(a: List[int], b: List[int]) -> Tuple[List[int], int]:
+    """Add same-length bit lists, return (sum_bits, carry_out)."""
+    if len(a) != len(b):
+        raise ValueError("lengths must match")
+    out = [0] * len(a)
+    cin = 0
+    for i in range(len(a)):
+        ai, bi = a[i], b[i]
+        axb = ai ^ bi
+        s = axb ^ cin
+        cout = (ai & bi) | (cin & axb)
+        out[i] = s
+        cin = cout
+    return out, cin
+
+
+def _sub_n(a: List[int], b: List[int]) -> Tuple[List[int], int]:
+    """Compute a - b as a + (~b + 1); returns (diff, borrow_flag_like)."""
+    nb = _not_bits(b)
+    tmp, cin = _add_n(a, nb)
+    diff, cin2 = _add_n(tmp, [1] + [0] * (len(a) - 1))
+    borrow = 0 if cin2 == 1 else 1
+    return diff, borrow
+
+
+def _sll_n(bits: List[int], k: int) -> List[int]:
+    out = bits[:]
+    stages = (1, 2, 4, 8, 16, 32, 64)
+    for idx, st in enumerate(stages):
+        if (k >> idx) & 1:
+            tmp = [0] * len(out)
+            for i in range(len(out)):
+                if i >= st:
+                    tmp[i] = out[i - st]
+            out = tmp
+    return out
+
+
+def _srl_n(bits: List[int], k: int, fill: int = 0) -> List[int]:
+    out = bits[:]
+    stages = (1, 2, 4, 8, 16, 32, 64)
+    for idx, st in enumerate(stages):
+        if (k >> idx) & 1:
+            tmp = [fill] * len(out)
+            for i in range(len(out)):
+                j = i + st
+                if j < len(out):
+                    tmp[i] = out[j]
+            out = tmp
+    return out
+
+
+def _sign_extend_to_64(x: List[int]) -> List[int]:
+    sign = x[31]
+    return x[:] + [sign] * 32
+
+
+def _zero_extend_to_64(x: List[int]) -> List[int]:
+    return x[:] + [0] * 32
+
+
+def _twos_neg(bits: List[int]) -> List[int]:
+    inv = _not_bits(bits)
+    res, _ = _add_n(inv, [1] + [0] * (len(bits) - 1))
+    return res
+
+
+def _is_zero(bits: List[int]) -> bool:
+    return all(b == 0 for b in bits)
 
 
 def mul_shift_add(rs1_bits: List[int], rs2_bits: List[int]) -> Dict[str, object]:
-    """Signed 32×32 → low32 product via classic shift-add with trace.
-
-    :param List[int] rs1_bits: Multiplicand, 32-bit LSB-first.
-    :param List[int] rs2_bits: Multiplier, 32-bit LSB-first.
-    :returns: ``{'rd_bits': List[int], 'overflow': int, 'trace': List[dict]}``.
-    :rtype: Dict[str, object]
+    """Signed 32×32 → low32 product using classic shift-add with trace.
+    Trace shows step
+    Overflow flag = 1 when the true 64-bit signed product doesn't fit in 32-bit signed.
+    (Shift–add idea: add shifted multiplicand when current multiplier bit is 1.)
     """
-    raise NotImplementedError("mul_shift_add not implemented")
+    _check32(rs1_bits)
+    _check32(rs2_bits)
+    trace: List[dict] = []
+    a64 = _sign_extend_to_64(rs1_bits)
+    b32 = rs2_bits[:]
+    acc = [0] * 64
+    for i in range(32):
+        add_now = 1 if b32[i] == 1 else 0
+        if add_now:
+            addend = _sll_n(a64, i)
+            acc, _ = _add_n(acc, addend)
+        low32 = acc[:32]
+        hi32 = acc[32:]
+        trace.append(
+            {
+                "step": i,
+                "mul_bit": int(b32[i]),
+                "added": add_now,
+                "acc_low32_hex": f"0x{bits_to_u32(low32):08X}",
+                "acc_hi32_hex": f"0x{bits_to_u32(hi32):08X}",
+            }
+        )
+    rd_bits = acc[:32]
+    sign32 = rd_bits[31]
+    overflow = 0
+    for j in range(32, 64):
+        if acc[j] != sign32:
+            overflow = 1
+            break
+    return {"rd_bits": rd_bits, "overflow": overflow, "trace": trace}
+
+
+def _cmp_unsigned(a: List[int], b: List[int]) -> int:
+    """Compare same-length unsigned bit lists (MSB first compare)."""
+    assert len(a) == len(b)
+    for i in range(len(a) - 1, -1, -1):
+        if a[i] != b[i]:
+            return 1 if a[i] > b[i] else -1
+    return 0
+
+
+def _abs_sign(bits: List[int]) -> Tuple[List[int], int]:
+    """Return (abs_bits, sign) for 32-bit two's complement input."""
+    if bits[31] == 1:
+        return _twos_neg(bits), 1
+    else:
+        return bits[:], 0
+
+
+def _clip32(x: List[int]) -> List[int]:
+    return x[:32]
 
 
 def div_restoring(
     dividend_bits: List[int], divisor_bits: List[int], signed: bool = True
 ) -> Dict[str, object]:
-    """Restoring division with per-iteration remainder/quotient trace.
-
-    :param List[int] dividend_bits: 32-bit dividend, LSB first.
-    :param List[int] divisor_bits: 32-bit divisor, LSB first.
-    :param bool signed: If True perform signed DIV/REM; else DIVU/REMU.
-    :returns: ``{'q_bits': List[int], 'r_bits': List[int], 'flags': dict, 'trace': List[dict]}``.
-    :rtype: Dict[str, object]
-    :raises ZeroDivisionError: For divisor==0 (you may intercept to match RV32M).
+    """Binary restoring division with 32 iterations and a simple trace.
+    - If signed=True: handle signs like RISC-V DIV/REM (quot trunc toward 0; rem same sign as dividend).
+    - Edge cases: div-by-zero and INT_MIN/-1 per RISC-V M.
     """
-    raise NotImplementedError("div_restoring not implemented")```
+    _check32(dividend_bits)
+    _check32(divisor_bits)
+    flags = {"div_by_zero": 0, "overflow": 0}
+    trace: List[dict] = []
+
+    if _is_zero(divisor_bits):
+        flags["div_by_zero"] = 1
+        q_bits = [1] * 32
+        r_bits = dividend_bits[:]
+        return {
+            "q_bits": q_bits,
+            "r_bits": r_bits,
+            "flags": flags,
+            "trace": trace,
+        }
+
+    if signed:
+        if (
+            bits_to_u32(dividend_bits) == INT32_MIN
+            and bits_to_u32(divisor_bits) == MASK32
+        ):
+            q_bits = u32_to_bits(INT32_MIN)
+            r_bits = u32_to_bits(0)
+            flags["overflow"] = 1
+            return {
+                "q_bits": q_bits,
+                "r_bits": r_bits,
+                "flags": flags,
+                "trace": trace,
+            }
+        dvd_abs, dvd_sign = _abs_sign(dividend_bits)
+        dvs_abs, dvs_sign = _abs_sign(divisor_bits)
+        q_sign = dvd_sign ^ dvs_sign
+    else:
+        dvd_abs, dvs_abs = dividend_bits[:], divisor_bits[:]
+        q_sign = 0
+
+    R = [0] * 33
+    Q = dvd_abs[:]
+    D = dvs_abs[:]
+    D33 = D[:] + [0]
+
+    for step in range(32):
+        msb_q = Q[31]
+        R = [msb_q] + R[:32]
+        Q = [0] + Q[:31]
+        R_try, borrow = _sub_n(R, D33)
+        if R_try[32] == 1:
+            qb = 0
+        else:
+            R = R_try
+            qb = 1
+        Q[0] = qb
+        trace.append(
+            {
+                "step": step,
+                "qb": qb,
+                "R_top_hex": f"0x{bits_to_u32(R[1:33]):08X}",
+                "Q_hex": f"0x{bits_to_u32(Q):08X}",
+            }
+        )
+
+    q_bits_unsigned = Q
+    r_bits_unsigned = R[0:32]
+
+    if signed and q_sign == 1:
+        q_bits_unsigned = _twos_neg(q_bits_unsigned)
+    if signed and (dividend_bits[31] == 1):
+        if not _is_zero(r_bits_unsigned):
+            r_bits_unsigned = _twos_neg(r_bits_unsigned)
+
+    q_bits = _clip32(q_bits_unsigned)
+    r_bits = _clip32(r_bits_unsigned)
+    return {
+        "q_bits": q_bits,
+        "r_bits": r_bits,
+        "flags": flags,
+        "trace": trace,
+    }```
 
 ########################################
 Here is my code for shifter.py BELOW:
@@ -476,6 +731,47 @@ or a barrel shifter built from stages (powers of two).
 from typing import List
 
 
+def _validate_bits_32(bits: List[int]) -> None:
+    if not isinstance(bits, list):
+        raise ValueError("bits must be a list")
+    if len(bits) != 32:
+        raise ValueError("bits must have length 32")
+    for b in bits:
+        if b not in (0, 1):
+            raise ValueError("bits must contain only 0/1")
+
+
+def _validate_shamt(shamt: int) -> int:
+    if not isinstance(shamt, int):
+        raise ValueError("shamt must be an int")
+    if shamt < 0 or shamt > 31:
+        raise ValueError("shamt must be in 0..31")
+    return shamt
+
+
+def _shift_left_by_k(src: List[int], k: int, fill: int = 0) -> List[int]:
+    """LSB-first: out[i] = src[i-k] if i>=k else fill."""
+    out = [0] * 32
+    for i in range(32):
+        if i >= k:
+            out[i] = src[i - k]
+        else:
+            out[i] = fill
+    return out
+
+
+def _shift_right_by_k(src: List[int], k: int, fill: int = 0) -> List[int]:
+    """LSB-first: out[i] = src[i+k] if i+k<32 else fill."""
+    out = [0] * 32
+    for i in range(32):
+        j = i + k
+        if j < 32:
+            out[i] = src[j]
+        else:
+            out[i] = fill
+    return out
+
+
 def sll_bits(bits: List[int], shamt: int) -> List[int]:
     """Shift left logical by ``shamt`` (insert zeros on the right).
 
@@ -484,7 +780,15 @@ def sll_bits(bits: List[int], shamt: int) -> List[int]:
     :returns: New 32-bit list after SLL.
     :rtype: List[int]
     """
-    raise NotImplementedError("sll_bits not implemented")
+    _validate_bits_32(bits)
+    k = _validate_shamt(shamt)
+
+    out = bits[:]
+    stages = (1, 2, 4, 8, 16)
+    for idx, stage in enumerate(stages):
+        if (k >> idx) & 1:
+            out = _shift_left_by_k(out, stage, fill=0)
+    return out
 
 
 def srl_bits(bits: List[int], shamt: int) -> List[int]:
@@ -495,7 +799,15 @@ def srl_bits(bits: List[int], shamt: int) -> List[int]:
     :returns: New 32-bit list after SRL.
     :rtype: List[int]
     """
-    raise NotImplementedError("srl_bits not implemented")
+    _validate_bits_32(bits)
+    k = _validate_shamt(shamt)
+
+    out = bits[:]
+    stages = (1, 2, 4, 8, 16)
+    for idx, stage in enumerate(stages):
+        if (k >> idx) & 1:
+            out = _shift_right_by_k(out, stage, fill=0)
+    return out
 
 
 def sra_bits(bits: List[int], shamt: int) -> List[int]:
@@ -506,7 +818,16 @@ def sra_bits(bits: List[int], shamt: int) -> List[int]:
     :returns: New 32-bit list after SRA.
     :rtype: List[int]
     """
-    raise NotImplementedError("sra_bits not implemented")```
+    _validate_bits_32(bits)
+    k = _validate_shamt(shamt)
+
+    sign = bits[31]
+    out = bits[:]
+    stages = (1, 2, 4, 8, 16)
+    for idx, stage in enumerate(stages):
+        if (k >> idx) & 1:
+            out = _shift_right_by_k(out, stage, fill=sign)
+    return out```
 
 ########################################
 Here is my code for twos.py BELOW:
@@ -696,11 +1017,82 @@ Here is my code for conftest.py BELOW:
 ```
 
 ########################################
+Here is my code for smoke_mdu.py BELOW:
+########################################
+
+```python
+from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
+from midterm_440.numeric_core.mdu import div_restoring, mul_shift_add
+
+
+
+def hx(b):
+    return f"0x{bits_to_u32(b):08X}"
+
+
+a = u32_to_bits(12345678)
+b = u32_to_bits(0xFFFFFFFF)
+m = mul_shift_add(a, b)
+print("MUL 12345678 * -1 -> rd =", hx(m["rd_bits"]), "overflow=", m["overflow"])
+
+a = u32_to_bits(0xFFFFFFF9)
+b = u32_to_bits(3)
+d = div_restoring(a, b, signed=True)
+print("DIV -7 / 3 -> q =", hx(d["q_bits"]), "r =", hx(d["r_bits"]), d["flags"])
+
+a = u32_to_bits(0x80000000)
+b = u32_to_bits(3)
+du = div_restoring(a, b, signed=False)
+print(
+    "DIVU 0x80000000 / 3 -> q =", hx(du["q_bits"]), "r =", hx(du["r_bits"]), du["flags"]
+)
+
+a = u32_to_bits(123)
+b = u32_to_bits(0)
+dz = div_restoring(a, b, signed=True)
+print("DIV 123 / 0 -> q =", hx(dz["q_bits"]), "r =", hx(dz["r_bits"]), dz["flags"])
+
+a = u32_to_bits(0x80000000)
+b = u32_to_bits(0xFFFFFFFF)
+io = div_restoring(a, b, signed=True)
+print("DIV INT_MIN/-1 -> q =", hx(io["q_bits"]), "r =", hx(io["r_bits"]), io["flags"])```
+
+########################################
 Here is my code for test_alu.py BELOW:
 ########################################
 
 ```python
-```
+# tests/unit/test_alu.py
+from midterm_440.numeric_core.alu import add_bits, sub_bits
+from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
+
+
+def bits_to_u32_hex(bits):
+    return f"0x{bits_to_u32(bits):08X}"
+
+
+def test_add_overflow_positive_edge():
+    a = u32_to_bits(0x7FFFFFFF)
+    b = u32_to_bits(0x00000001)
+    res, N, Z, C, V = add_bits(a, b)
+    assert bits_to_u32_hex(res) == "0x80000000"
+    assert (V, C, N, Z) == (1, 0, 1, 0)
+
+
+def test_sub_overflow_negative_edge():
+    a = u32_to_bits(0x80000000)
+    b = u32_to_bits(0x00000001)
+    res, N, Z, C, V = sub_bits(a, b)
+    assert bits_to_u32_hex(res) == "0x7FFFFFFF"
+    assert (V, C, N, Z) == (1, 1, 0, 0)
+
+
+def test_add_minus1_plus_minus1():
+    a = u32_to_bits(0xFFFFFFFF)
+    b = u32_to_bits(0xFFFFFFFF)
+    res, N, Z, C, V = add_bits(a, b)
+    assert bits_to_u32_hex(res) == "0xFFFFFFFE"
+    assert (V, C, N, Z) == (0, 1, 1, 0)```
 
 ########################################
 Here is my code for test_bits.py BELOW:
@@ -772,6 +1164,93 @@ Here is my code for test_mdu.py BELOW:
 
 ```python
 ```
+
+########################################
+Here is my code for test_shifter.py BELOW:
+########################################
+
+```python
+# tests/unit/test_shifter.py
+import pytest
+
+from midterm_440.numeric_core.bits import bits_to_u32, u32_to_bits
+from midterm_440.numeric_core.shifter import sll_bits, sra_bits, srl_bits
+
+
+
+def _hex_u32(bits):
+    return f"0x{bits_to_u32(bits):08X}"
+
+
+def test_sll_basic():
+    a = u32_to_bits(0x00000001)
+    out = sll_bits(a, 1)
+    assert _hex_u32(out) == "0x00000002"
+
+
+def test_sll_drop_msb():
+    a = u32_to_bits(0x80000000)
+    out = sll_bits(a, 1)
+    assert _hex_u32(out) == "0x00000000"
+
+
+def test_srl_basic():
+    a = u32_to_bits(0x80000000)
+    out = srl_bits(a, 1)
+    assert _hex_u32(out) == "0x40000000"
+
+
+def test_srl_to_zero():
+    a = u32_to_bits(0x00000001)
+    out = srl_bits(a, 1)
+    assert _hex_u32(out) == "0x00000000"
+
+
+def test_sra_sign_extend_negative():
+    a = u32_to_bits(0x80000001)
+    out = sra_bits(a, 1)
+    assert _hex_u32(out) == "0xC0000000"
+
+
+def test_sra_sign_extend_positive():
+    a = u32_to_bits(0x7FFFFFFF)
+    out = sra_bits(a, 1)
+    assert _hex_u32(out) == "0x3FFFFFFF"
+
+
+def test_edge_shamt_zero():
+    a = u32_to_bits(0xA5A5A5A5)
+    assert _hex_u32(sll_bits(a, 0)) == "0xA5A5A5A5"
+    assert _hex_u32(srl_bits(a, 0)) == "0xA5A5A5A5"
+    assert _hex_u32(sra_bits(a, 0)) == "0xA5A5A5A5"
+
+
+def test_edge_shamt_31_patterns():
+    a = u32_to_bits(0x00000001)
+    assert _hex_u32(sll_bits(a, 31)) == "0x80000000"
+    b = u32_to_bits(0x80000000)
+    assert _hex_u32(srl_bits(b, 31)) == "0x00000001"
+    assert _hex_u32(sra_bits(b, 31)) == "0xFFFFFFFF"
+
+
+def test_invalid_shamt():
+    a = u32_to_bits(0x12345678)
+    with pytest.raises(ValueError):
+        sll_bits(a, -1)
+    with pytest.raises(ValueError):
+        srl_bits(a, 32)
+    with pytest.raises(ValueError):
+        sra_bits(a, 99)
+
+
+def test_invalid_bits_length():
+    bad = [0, 1, 0]
+    with pytest.raises(ValueError):
+        sll_bits(bad, 1)
+    with pytest.raises(ValueError):
+        srl_bits(bad, 1)
+    with pytest.raises(ValueError):
+        sra_bits(bad, 1)```
 
 ########################################
 Here is my code for test_twos.py BELOW:
